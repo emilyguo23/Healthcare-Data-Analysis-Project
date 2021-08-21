@@ -1,0 +1,279 @@
+---
+title: "Final Project"
+output: html_document
+---
+
+Setup
+```{r}
+rm(list = ls())
+#setwd("~/Desktop/CMU/73-265")
+
+#load libraries
+library(tidyverse)
+library(dplyr)
+library(plyr)
+library(car)
+library(GGally)
+library(readxl)
+library(zoo)
+library(writexl)
+library(stargazer)
+
+#import data
+infantMortality <- read_csv("FP-childMortality.csv")
+lifeExpectancy <- read_csv("FP-life-expectancy.csv")
+spendingPerCap <- read_excel("FP-expenditurePerCapita-DWB.xls", range = "A4:BJ268")
+spendingGDP <- read_csv("FP-public-health-expenditure-share-GDP.csv")
+doctors <- read_excel("FP-numberOfPhysicians.xls", range = "A4:BJ268")
+
+```
+
+
+Tidy and Standardize Dataframes
+```{r}
+spendingPerCap <- subset(spendingPerCap, select = -c(3,4:44))
+spendingPerCap <- pivot_longer(spendingPerCap, !c(`Country Name`, `Country Code`),
+                                  names_to = "Year", values_to = "Expenditure per Capita")
+
+doctors <- subset(doctors, select = -c(3,4:44))
+doctors <- pivot_longer(doctors, !c(`Country Name`, `Country Code`),
+                              names_to = "Year", 
+                              values_to = "Number of Physicians per 1000 People")
+missing_vals <- which(is.na(doctors$`Number of Physicians per 1000 People`))
+doctors$`Number of Physicians per 1000 People`[missing_vals] <- 
+  sapply(missing_vals, function(i) with(doctors, mean(c(`Number of Physicians per 1000 People`[i-1], `Number of Physicians per 1000 People`[i+1]))))
+
+infantMortality <- subset(infantMortality, select = -c(4:6))
+
+spendingGDP <- rename(spendingGDP, c("Entity" = "Country"))
+spendingPerCap <- rename(spendingPerCap, c("Country Name" = "Country"))
+infantMortality <- rename(infantMortality, c("Entity" = "Country"))
+lifeExpectancy <- rename(lifeExpectancy, c("Entity" = "Country"))
+doctors <- rename(doctors,  c("Country Name" = "Country"))
+```
+
+
+Merge All Dataframes into One Main Dataframe
+```{r}
+list <- list(spendingGDP, spendingPerCap, infantMortality, 
+             lifeExpectancy, doctors)
+countries <- c("Belgium", "Germany", "Japan")
+
+data <- lapply(list, function(x) 
+  x[-c(2)])
+
+data2 <- lapply(data, subset, Country %in% countries & Year >= 2000)
+
+dataset <- merge(data2[[1]], data2[[2]], all = T)
+dataset <- merge(dataset, data2[[3]], all = T)
+dataset <- merge(dataset, data2[[4]], all = T)
+dataset <- merge(dataset, data2[[5]], all = T)
+
+#rename columns
+dataset <- rename(dataset, 
+                  c('Public expenditure on health %GDP (OWID extrapolated series)' = "PercentGDP",
+                  'Expenditure per Capita' = "PerCap",
+                  'Mortality rate, under-5 (per 1,000 live births)' = "ChildMortality",
+                  'Life expectancy' = "LifeExp",
+                  'Number of Physicians per 1000 People' = "Doctors"))
+dataset$System <- "Bismarck"
+
+#create ratio variable
+dataset$Ratio <- dataset$`LifeExp`/dataset$PercentGDP
+```
+
+
+Exploratory Data Analysis Visualizations
+```{r}
+national <- read_excel("FP-national_sys.xlsx")
+private <- read_excel("FP-privatedataUPDATED.xlsx")
+beveridge <- read_excel("FP-beveridgedata.xlsx")
+
+dfMerged <- merge(dataset, national, all = T)
+dfMerged <- merge(dfMerged, private, all = T)
+dfMerged <- merge(dfMerged, beveridge, all = T)
+dfMerged <- drop_na(dfMerged)
+
+#per capita distribution by country -- histogram
+
+means <- ddply(dfMerged, "System", summarise, perCap.mean=mean(PerCap))
+#creates table of mean per capita exp
+
+perCap_distribution <- ggplot(data = dfMerged, aes(x = PerCap, fill = System)) +
+  geom_histogram(color = "black") +
+  geom_vline(data = means, aes(xintercept = perCap.mean, color = System),
+             linetype="dashed") +
+  facet_grid(rows = vars(System)) +
+  labs(title = "Distribution of Healthcare Expenditure per Capita in USD",
+       y = "Count",
+       x = "Expenditure per Capita (USD)") +
+  theme(legend.position = "none")
+perCap_distribution
+
+
+#percent GDP distribution by country -- histogram
+means2 <- ddply(dfMerged, "System", summarise, percentGDP.mean=mean(PercentGDP))
+
+percentGDP_distribution <- ggplot(data = dfMerged, aes(x = PercentGDP, fill = System)) +
+  geom_histogram(color = "black") +
+  geom_vline(data = means2, aes(xintercept = percentGDP.mean, color = System),
+             linetype="dashed") +
+  facet_grid(rows = vars(System)) +
+  labs(title = "Distribution of Healthcare Expenditure as a Percent of Each Nation's GDP",
+       y = "Count",
+       x = "%GDP") +
+    theme(legend.position = "none")
+percentGDP_distribution
+
+```
+
+
+Data Visualizations
+```{r}
+
+#Plot 1 -- Expenditure per capita vs child mortality (stack 3 countries, scatterplot)
+plot1 <- ggplot(data = dataset, aes(x = PerCap, y = ChildMortality)) +
+  geom_point(aes(color = Country)) +
+  ggtitle("Bismarck Healthcare System") +
+  xlab("Healthcare Expenditure per Capita in USD") +
+  ylab("Total Number of Deaths Under 5 Years of Age") + 
+  scale_color_discrete(name = "Country", labels = c("Belgium", "Germany", "Japan"))
+plot1
+
+
+#Plot 2 -- Expenditure per capita vs life expectancy (stack 3 countries, scatterplot)
+plot2 <- ggplot(data = dataset, aes(x = PerCap, y = LifeExp)) +
+  geom_point(aes(color = Country)) +
+  ggtitle("Bismarck Healthcare System") +
+  xlab("Healthcare Expenditure per Capita in USD") +
+  ylab("Average Life Expectancy") + 
+  scale_color_discrete(name = "Country", labels = c("Belgium", "Germany", "Japan", "USA"))
+plot2
+
+
+#Plot 3 -- Expenditure per capita vs (medical doctors/1000 people) (stack 3 countries, line graph)
+plot3 <- ggplot(data = dataset, aes(x = PerCap, y = Doctors)) +
+  geom_point(aes(color = Country)) + 
+  ggtitle("Bismarck Healthcare System") +
+  xlab("Healthcare Expenditure per Capita in USD") +
+  ylab("Number of Physicians per 1000 People") + 
+  scale_color_discrete(name = "Country", labels = c("Belgium", "Germany", "Japan", "USA"))
+plot3
+
+
+#Plot 4 -- [life expectancy/(expenditure%gdp)] vs year (stack 3 countries, line)
+plot4 <- ggplot(data = dataset, aes(x = Year, y = LifeExp / PercentGDP)) +
+  geom_line(aes(color = Country, group = Country)) + 
+  ggtitle("Bismarck Healthcare System") +
+  xlab("Year") +
+  ylab("Life Expectancy / Healthcare Expenditure in %GDP") + 
+  scale_x_discrete(breaks = seq(2000, 2014, by = 2)) + 
+  scale_color_discrete(name = "Country", labels = c("Belgium", "Germany", "Japan", "USA"))
+plot4
+
+#Plot 5 -- Life expectancy vs years (line graph - 3 countries stack)
+plot5 <- ggplot(data = dataset) +
+  geom_line(aes(x = Year, y = LifeExp, group = Country, color = Country)) + 
+  ggtitle("Bismarck Healthcare System") +
+  xlab("Year") +
+  scale_x_discrete(breaks = seq(2000, 2019, by = 2)) + 
+  ylab("Average Life Expectancy") + 
+  scale_color_discrete(name = "Country", labels = c("Belgium", "Germany", "Japan", "USA"))
+plot5
+
+
+#Plot 6 -- Child Mortality vs years (line graph - 3 countries stack)
+plot6 <- ggplot(data = dataset) +
+  geom_line(aes(x = Year, y = ChildMortality, group = Country, color = Country)) + 
+  ggtitle("Bismarck Healthcare System") +
+  xlab("Year") +
+  scale_x_discrete(breaks = seq(2000, 2019, by = 2)) + 
+  ylab("Total Number of Deaths Under 5 Years of Age") + 
+  scale_color_discrete(name = "Country", labels = c("Belgium", "Germany", "Japan"))
+plot6
+
+
+#Plot 7 -- (medical doctors/1000 people) vs years (line graph - 3 countries stack)
+plot7 <- ggplot(data = dataset) +
+  geom_line(aes(x = Year, y = Doctors, group = Country, color = Country)) + 
+  ggtitle("Bismarck Healthcare System") +
+  xlab("Year") +
+  scale_x_discrete(breaks = seq(2000, 2019, by = 2)) + 
+  ylab("Number of Physicians per 1000 People") + 
+  scale_color_discrete(name = "Country", labels = c("Belgium", "Germany", "Japan", "USA"))
+plot7
+
+```
+
+
+Regressions
+```{r}
+#New Model:
+#(life exp / mortality) ~ (mortality / life exp) + expenditure + year + year*expenditure + (mortality / life exp)*expenditure
+
+#life expectancy
+regression1 <- lm(LifeExp ~ ChildMortality + PerCap + as.integer(Year) + PerCap*as.integer(Year) + ChildMortality*PerCap, data = dataset)
+summary(regression1)
+exp_lifeExp <- stargazer(regression1, type = "text", 
+                           title = "Bismarck System", 
+                           dep.var.labels = "Life Expectancy", 
+                           covariate.labels = c(
+                             "Child Mortality",
+                             "Healthcare Expenditure per Capita", 
+                             "Year", 
+                             "Year:Expenditure",
+                             "Child Mortality:Expenditure"), 
+                           omit.stat = c("adj.rsq", "f", "n"), 
+                           out = "exp_lifeExp_table.txt")
+
+
+#child mortality
+regression2 <- lm(ChildMortality ~ LifeExp + PerCap + as.integer(Year) + PerCap*as.integer(Year) + LifeExp*PerCap, data = dataset)
+summary(regression2)
+exp_childMort <- stargazer(regression2, type = "text", 
+                           title = "Bismarck System", 
+                           dep.var.labels = "Child Mortality", 
+                           covariate.labels = c(
+                             "Life Expectancy",
+                             "Healthcare Expenditure per Capita", 
+                             "Year", 
+                             "Year:Expenditure",
+                             "Life Expectancy:Expenditure"), 
+                           omit.stat = c("adj.rsq", "f", "n"), 
+                           out = "exp_childMort_table.txt")
+
+```
+
+
+Check OLS Assumptions
+```{r}
+#linearity of data
+#homogeneity of variance
+#normality of residuals (Q-Q plot)
+
+
+#life expectancy
+plot(regression1, 1)
+residualPlot(regression1)
+plot(regression1, 3) #heteroscedastic variance
+qqPlot(regression1)
+plot(regression1, 2) #approx normal
+ggpairs(regression1)
+ggplot(data = dataset, aes(x = LifeExp, y = PerCap)) +
+  geom_point()
+
+#child mortality
+plot(regression2, 1)
+residualPlot(regression2)
+qqPlot(regression2)
+plot(regression2, 2) #roughly normal residuals
+ggplot(data = dataset, aes(x = ChildMortality, y = PerCap)) +
+  geom_point()
+
+```
+
+
+
+
+
+
